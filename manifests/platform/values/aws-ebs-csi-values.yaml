@@ -1,0 +1,12 @@
+# The driver authenticates via the node IAM instance profile (Terraform), so no keys here.
+controller:
+  replicaCount: 1                      # single small cluster; bump to 2 for controller HA
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+node:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 40Mi

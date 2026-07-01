@@ -5,6 +5,7 @@ resource "aws_instance" "server" {
   vpc_security_group_ids = [var.security_group_id]
   key_name               = var.key_name
   availability_zone      = var.availability_zone
+  iam_instance_profile   = aws_iam_instance_profile.node.name
 
   root_block_device {
     volume_size = var.root_volume_size
@@ -26,6 +27,7 @@ resource "aws_instance" "agent" {
   vpc_security_group_ids = [var.security_group_id]
   key_name               = var.key_name
   availability_zone      = var.availability_zone
+  iam_instance_profile   = aws_iam_instance_profile.node.name
 
   root_block_device {
     volume_size = var.root_volume_size

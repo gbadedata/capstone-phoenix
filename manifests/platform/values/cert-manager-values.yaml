@@ -1,0 +1,15 @@
+# CRDs are installed via --set crds.enabled=true in the install script.
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+webhook:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+cainjector:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi

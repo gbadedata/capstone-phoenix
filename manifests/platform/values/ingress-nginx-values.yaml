@@ -1,0 +1,26 @@
+# ingress-nginx on k3s. k3s's built-in servicelb (klipper) exposes this LoadBalancer
+# service on ports 80/443 across ALL node IPs, so any node can receive traffic.
+controller:
+  replicaCount: 2                      # HA: survives a node loss
+  service:
+    type: LoadBalancer
+  publishService:
+    enabled: true
+  ingressClassResource:
+    name: nginx
+    default: false                     # we set ingressClassName explicitly on the Ingress
+  # spread the two controller pods across different nodes (soft — won't block scheduling)
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+          app.kubernetes.io/component: controller
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi

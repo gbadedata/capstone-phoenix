@@ -1,0 +1,13 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+provisioner: ebs.csi.aws.com
+# WaitForFirstConsumer is critical: the EBS volume is created in the SAME AZ as the pod
+# that claims it, and only after that pod is scheduled. Prevents AZ-mismatch failures.
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete                   # clean teardown. Use Retain in true production.
+parameters:
+  type: gp3
+  encrypted: "true"

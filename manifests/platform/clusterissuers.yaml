@@ -1,0 +1,33 @@
+# Two issuers:
+#  - staging: use while testing (high rate limits, but browsers DON'T trust the cert)
+#  - prod:    the real, browser-trusted Let's Encrypt cert
+# IMPORTANT: replace YOUR_REAL_EMAIL with your real email before applying.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: YOUR_REAL_EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: YOUR_REAL_EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
