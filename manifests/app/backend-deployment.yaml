@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: taskapp
+spec:
+  # No replicas here on purpose — the HPA owns backend scaling (minReplicas: 2).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend
+      initContainers:
+        # Wait until the db-init Job has migrated AND seeded, so the backend's own entrypoint
+        # (which runs `alembic upgrade head`) never races with other replicas on migration.
+        - name: wait-for-db-ready
+          image: ghcr.io/ts-a-devops/taskapp-backend:5d6b8fc
+          envFrom:
+            - secretRef:
+                name: taskapp-secret
+          command:
+            - python
+            - -c
+            - |
+              import os, time, psycopg2
+              while True:
+                  try:
+                      conn = psycopg2.connect(os.environ["DATABASE_URL"])
+                      cur = conn.cursor()
+                      cur.execute("SELECT count(*) FROM users")
+                      if cur.fetchone()[0] > 0:
+                          print("db migrated and seeded"); break
+                      print("waiting: users not seeded yet")
+                  except Exception as e:
+                      print("waiting for db:", e)
+                  time.sleep(3)
+      containers:
+        - name: backend
+          image: ghcr.io/ts-a-devops/taskapp-backend:5d6b8fc
+          ports:
+            - containerPort: 5000
+          # config = PORT/FLASK_ENV/POSTGRES_*/DATABASE_HOST/PORT/NAME/USER
+          # secret = SECRET_KEY/POSTGRES_PASSWORD/DATABASE_PASSWORD/DATABASE_URL
+          envFrom:
+            - configMapRef:
+                name: taskapp-config
+            - secretRef:
+                name: taskapp-secret
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+          startupProbe:
+            tcpSocket:
+              port: 5000
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            tcpSocket:
+              port: 5000
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 5000
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi     # measured ~156Mi at rest; headroom so the HPA reflects real load
+            limits:
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault

@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  namespace: taskapp
+  annotations:
+    # Under Argo CD this runs to completion BEFORE the app syncs (migrate + seed first).
+    # Under plain `kubectl apply -k` the annotations are inert; it runs as a normal Job.
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        app: db-init          # distinct from "backend" so the backend Service never selects it
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16.4
+          command: ["sh", "-c", "until pg_isready -h postgres -p 5432 -U taskuser; do echo waiting for postgres; sleep 2; done"]
+      containers:
+        - name: db-init
+          image: ghcr.io/ts-a-devops/taskapp-backend:5d6b8fc
+          envFrom:
+            - configMapRef:
+                name: taskapp-config      # DATABASE_HOST/PORT/NAME/USER (for alembic)
+            - secretRef:
+                name: taskapp-secret      # DATABASE_PASSWORD, DATABASE_URL, SECRET_KEY
+          # Run the image's real migrations, then seed the demo users idempotently.
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cd /app
+              echo ">> alembic upgrade head"
+              alembic upgrade head
+              echo ">> seeding demo users (idempotent)"
+              python -c "
+              import os
+              from app import db
+              import app.models
+              from sqlalchemy import create_engine
+              from sqlalchemy.orm import Session
+              from werkzeug.security import generate_password_hash
+              engine = create_engine(os.environ['DATABASE_URL'])
+              s = Session(engine)
+              if s.query(app.models.User).count() == 0:
+                  s.add(app.models.User(username='admin', password_hash=generate_password_hash('admin123')))
+                  s.add(app.models.User(username='user',  password_hash=generate_password_hash('user123')))
+                  s.commit(); print('seeded 2 users')
+              else:
+                  print('users already present:', s.query(app.models.User).count())
+              "

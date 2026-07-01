@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: taskapp
+
+# NOTE: secret.example.yaml is intentionally NOT listed — the real Secret is created
+# out-of-band by create-secret.sh so no plaintext credential is ever committed.
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - postgres-service.yaml
+  - postgres-statefulset.yaml
+  - backend-service.yaml
+  - backend-deployment.yaml
+  - frontend-service.yaml
+  - frontend-deployment.yaml
+  - db-init-job.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+  - pdb.yaml
+
+# Central place to pin/swap image tags (no :latest anywhere).
+images:
+  - name: ghcr.io/ts-a-devops/taskapp-backend
+    newTag: 5d6b8fc
+  - name: ghcr.io/ts-a-devops/taskapp-frontend
+    newTag: 26da2b0
