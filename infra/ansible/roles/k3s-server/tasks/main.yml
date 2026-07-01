@@ -1,0 +1,47 @@
+---
+- name: Install k3s server
+  ansible.builtin.shell:
+    cmd: "curl -sfL https://get.k3s.io | sh -"
+    creates: /usr/local/bin/k3s
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version | default('', true) }}"
+    INSTALL_K3S_EXEC: "{{ k3s_install_exec }}"
+
+- name: Wait for the k3s API to be up
+  ansible.builtin.wait_for:
+    port: 6443
+    host: "{{ k3s_private_ip }}"
+    timeout: 120
+
+- name: Wait for the node-token file
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/k3s/server/node-token
+    timeout: 60
+
+- name: Read the node-token
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  register: k3s_token_slurp
+
+- name: Publish the join token as a fact (consumed by the agents)
+  ansible.builtin.set_fact:
+    k3s_node_token: "{{ k3s_token_slurp.content | b64decode | trim }}"
+
+- name: Read the generated kubeconfig
+  ansible.builtin.slurp:
+    src: /etc/rancher/k3s/k3s.yaml
+  register: k3s_kubeconfig_slurp
+
+- name: Write kubeconfig to your machine (server address rewritten to the public IP)
+  delegate_to: localhost
+  become: false
+  ansible.builtin.copy:
+    dest: "{{ playbook_dir }}/kubeconfig"
+    mode: "0600"
+    content: >-
+      {{ k3s_kubeconfig_slurp.content | b64decode
+         | regex_replace('https://127.0.0.1:6443', 'https://' + inventory_hostname + ':6443') }}
+
+- name: Show how to use the kubeconfig
+  ansible.builtin.debug:
+    msg: "kubeconfig written to infra/ansible/kubeconfig — run: export KUBECONFIG=$(pwd)/kubeconfig"

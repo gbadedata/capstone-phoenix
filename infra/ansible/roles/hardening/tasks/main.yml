@@ -1,0 +1,103 @@
+---
+# The Ubuntu AMI already ships a non-root sudo user ("ubuntu") with key-only access.
+# This role enforces the rest: no root SSH, no password auth, a host firewall (ufw) that
+# does NOT break k3s networking, and fail2ban.
+
+- name: Install ufw and fail2ban
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enforce SSH hardening (no root login, keys only)
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/99-capstone-hardening.conf
+    content: |
+      # Managed by Ansible (hardening role)
+      PermitRootLogin no
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart ssh
+
+# --- ufw: allow forwarded traffic so k3s pod/service networking works ---
+- name: Allow forwarded traffic in ufw (required for k3s CNI)
+  ansible.builtin.lineinfile:
+    path: /etc/default/ufw
+    regexp: '^DEFAULT_FORWARD_POLICY='
+    line: 'DEFAULT_FORWARD_POLICY="ACCEPT"'
+  notify: Reload ufw
+
+- name: ufw default deny incoming
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: ufw default allow outgoing
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+- name: ufw allow SSH
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    comment: "SSH (SG restricts source to admin IP)"
+
+- name: ufw allow HTTP
+  community.general.ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+    comment: "Ingress HTTP / ACME http-01"
+
+- name: ufw allow HTTPS
+  community.general.ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
+    comment: "Ingress HTTPS"
+
+- name: ufw allow Kubernetes API
+  community.general.ufw:
+    rule: allow
+    port: "6443"
+    proto: tcp
+    comment: "kube API (SG restricts source to admin IP)"
+
+- name: ufw allow all intra-cluster traffic from the VPC subnet
+  community.general.ufw:
+    rule: allow
+    src: "{{ cluster_subnet_cidr }}"
+    comment: "node-to-node"
+
+- name: ufw allow k3s pod CIDR
+  community.general.ufw:
+    rule: allow
+    src: "{{ k3s_pod_cidr }}"
+    comment: "k3s pods"
+
+- name: ufw allow k3s service CIDR
+  community.general.ufw:
+    rule: allow
+    src: "{{ k3s_service_cidr }}"
+    comment: "k3s services"
+
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
+
+- name: Ensure fail2ban is running
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true
+  when: enable_fail2ban | bool

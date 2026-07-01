@@ -1,0 +1,10 @@
+variable "project" { type = string }
+variable "ami_id" { type = string }
+variable "key_name" { type = string }
+variable "subnet_id" { type = string }
+variable "security_group_id" { type = string }
+variable "availability_zone" { type = string }
+variable "server_instance_type" { type = string }
+variable "agent_instance_type" { type = string }
+variable "agent_count" { type = number }
+variable "root_volume_size" { type = number }

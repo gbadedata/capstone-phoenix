@@ -1,0 +1,11 @@
+---
+# --disable traefik  -> we install ingress-nginx instead (documented in ARCHITECTURE.md)
+# --node-ip          -> bind/advertise on the private IP (agents join over the subnet)
+# --tls-san          -> add the public IP to the API cert so kubectl works from your laptop
+# --write-kubeconfig-mode 644 -> readable so we can fetch it
+k3s_install_exec: >-
+  server
+  --disable traefik
+  --node-ip {{ k3s_private_ip }}
+  --tls-san {{ inventory_hostname }}
+  --write-kubeconfig-mode 644

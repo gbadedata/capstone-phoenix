@@ -1,0 +1,16 @@
+---
+# ---- k3s ----
+# Empty = latest stable. After the first successful install, pin this to the exact version
+# (`ssh ubuntu@<server> k3s --version`) and re-run, so the cluster is reproducible.
+k3s_version: ""
+
+# ---- networking ----
+# Your VPC subnet: all node-to-node traffic is allowed from here (covers the k3s API,
+# flannel VXLAN, kubelet, etc. without enumerating every port).
+cluster_subnet_cidr: "10.0.1.0/24"
+# k3s built-in CIDRs — allowed through the host firewall so pod/service traffic is not dropped.
+k3s_pod_cidr: "10.42.0.0/16"
+k3s_service_cidr: "10.43.0.0/16"
+
+# ---- hardening ----
+enable_fail2ban: true

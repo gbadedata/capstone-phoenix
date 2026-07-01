@@ -1,0 +1,9 @@
+---
+- name: Restart ssh
+  ansible.builtin.service:
+    name: ssh
+    state: restarted
+
+- name: Reload ufw
+  community.general.ufw:
+    state: reloaded

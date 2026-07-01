@@ -31,3 +31,4 @@ charts/*.tgz
 *.swp
 .idea/
 .vscode/
+infra/ansible/inventory/hosts.ini

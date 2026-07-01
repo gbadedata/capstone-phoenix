@@ -1,0 +1,26 @@
+---
+# Turns the Terraform-provisioned VMs into a working k3s cluster.
+#   1) harden every node
+#   2) install the k3s server (control-plane) and capture its join token + kubeconfig
+#   3) join the workers as agents
+#
+# Run:   ansible-playbook site.yml
+# Idempotent: a second run reports changed=0.
+
+- name: Base hardening on all nodes
+  hosts: all
+  become: true
+  roles:
+    - hardening
+
+- name: Install k3s control-plane
+  hosts: server
+  become: true
+  roles:
+    - k3s-server
+
+- name: Join k3s workers
+  hosts: agents
+  become: true
+  roles:
+    - k3s-agent
