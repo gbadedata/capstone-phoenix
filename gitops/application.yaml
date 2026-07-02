@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: taskapp
+  namespace: argocd
+  # Keep the app from being deleted if the Application is removed accidentally.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/gbadedata/capstone-phoenix.git
+    targetRevision: main
+    path: manifests/app          # kustomize build runs here
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: taskapp
+
+  syncPolicy:
+    automated:
+      prune: true                # delete resources removed from git
+      selfHeal: true             # revert manual drift back to git state
+    syncOptions:
+      - CreateNamespace=false    # the namespace is defined in manifests/app
+      - ApplyOutOfSyncOnly=true
+
+  # The HPA owns backend replica count — tell Argo not to fight it.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: backend
+      jsonPointers:
+        - /spec/replicas
