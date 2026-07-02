@@ -1,194 +1,147 @@
-# Capstone — Phoenix: TaskApp on Real Kubernetes
+# Phoenix: TaskApp on a Self-Provisioned Kubernetes Cluster
 
-> **Mission.** Take the **TaskApp** you containerized and shipped to one server with
-> Portainer, and run it on a **multi-node Kubernetes cluster you provision yourself** —
-> highly available, autoscaling, zero-downtime, behind HTTPS on your own domain, with
-> **no manual `kubectl apply` in your final state** (GitOps owns the cluster).
->
-> You already know Terraform, Ansible, Docker, GHCR, CI/CD, and domains/TLS. This capstone
-> bolts Kubernetes onto exactly those skills. The hard parts are deliberately the *new*
-> parts — orchestration, HA, and the assumptions that break when you stop running on one box.
+Production-style deployment of a full-stack **TaskApp** (React/nginx + Flask/PostgreSQL) onto a
+**multi-node k3s cluster provisioned from scratch on AWS**, highly available, autoscaling,
+zero-downtime, behind HTTPS on a real domain, and reconciled entirely by **GitOps**.
 
-**Type:** individual · **Duration:** 3 weeks · **Repo:** `ts-a-devops/capstone-phoenix` (fork it)
-**App under test:** TaskApp — React/nginx frontend, Flask/Postgres backend, GHCR images
-`ghcr.io/ts-a-devops/taskapp-backend`, `ghcr.io/ts-a-devops/taskapp-frontend`.
+![Terraform](https://img.shields.io/badge/IaC-Terraform-7B42BC?logo=terraform&logoColor=white)
+![Ansible](https://img.shields.io/badge/Config-Ansible-EE0000?logo=ansible&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Orchestration-k3s-FFC61C?logo=kubernetes&logoColor=white)
+![Argo CD](https://img.shields.io/badge/GitOps-Argo%20CD-EF7B4D?logo=argo&logoColor=white)
+![cert-manager](https://img.shields.io/badge/TLS-Let's%20Encrypt-003A70?logo=letsencrypt&logoColor=white)
+![AWS](https://img.shields.io/badge/Cloud-AWS%20eu--west--2-232F3E?logo=amazonaws&logoColor=white)
 
----
-
-## 1. What you're given vs. what you build
-
-**Given (don't rebuild):**
-- The two app images, already on GHCR (you built them in the Docker lesson).
-- The K8s lesson + reference manifests in `cicd_dockerized/k8s-lesson/` — these target a
-  *single-node laptop* cluster. They are a **starting point, not a submission.** Lifting
-  them onto real multi-node infra with HA, GitOps, TLS, and the advanced requirements
-  below is the work.
-
-**You build:**
-1. **Infrastructure** (Terraform) — the nodes, network, firewall.
-2. **Cluster** (Ansible) — install k3s across those nodes; join workers.
-3. **Platform** (manifests/Helm) — ingress controller, cert-manager, metrics-server, GitOps controller.
-4. **App** (manifests) — TaskApp, hardened for multi-replica, multi-node, HA.
-5. **Docs + demo** — architecture, runbook, cost, and a live failure demo.
+**Live:** https://taskapp.gbadedata.com &nbsp;·&nbsp; **API:** https://api.gbadedata.com/api
 
 ---
 
-## 2. Infrastructure (Terraform) — you've done 90% of this before
+## What this is
 
-Provision a **multi-node** cluster. Reuse your single-EC2 Terraform as the seed and grow it.
+A single server with Docker Compose is easy. The moment you need **high availability,
+autoscaling, and zero-downtime deploys**, you need orchestration, and a pile of
+single-machine assumptions quietly break. This project takes an app that ran on one box and
+re-homes it on a real cluster, fixing each of those assumptions explicitly.
 
-**Required:**
-- **3 nodes minimum**: 1 control-plane (k3s server) + **2+ workers** (k3s agents). Real
-  scheduling across real machines — single-node does not satisfy this.
-- Modular Terraform (`network`, `security_group`/firewall, `compute`) with **remote state**
-  (S3 + DynamoDB lock, or equivalent for your provider). No local `terraform.tfstate` in git.
-- Least-privilege firewall: only `22` (your IP), `80`, `443` open to the world. The
-  Kubernetes API (`6443`) and node-to-node ports are **not** open to the internet.
-- All node config from variables — no hardcoded IPs, AMIs, or secrets.
-- Outputs: node public/private IPs, so Ansible can consume them.
+Everything is codified: **Terraform** builds the infrastructure, **Ansible** installs the
+cluster, **Helm + manifests** deploy the platform and app, and **Argo CD** keeps the live
+state continuously in sync with this repository. A teammate can reproduce the entire stack
+from [`docs/RUNBOOK.md`](docs/RUNBOOK.md) without asking a single question.
 
-> Cloud is your choice (AWS / GCP / Azure / Hetzner / DigitalOcean). Pick the cheapest that
-> gives you 3 small VMs. Keep the control plane simple — **one k3s server is fine; you do not
-> need a multi-master/HA control plane.** The difficulty in this capstone is Kubernetes
-> itself, not etcd quorum.
+## Architecture at a glance
 
----
+```
+                                   Internet
+                                      │
+                      DNS (GoDaddy)   │   taskapp.gbadedata.com
+                      A → 18.130.208.33   api.gbadedata.com
+                                      ▼
+                    ┌─────────────────────────────────────┐
+                    │   ingress-nginx   (on every node)    │  ← TLS terminated here
+                    │   Let's Encrypt cert via cert-manager │     (HTTP-01 challenge)
+                    └───────┬──────────────────────┬────────┘
+              taskapp.­…/    │                      │   api.­…/
+                            ▼                      ▼
+                   ┌────────────────┐     ┌──────────────────┐
+                   │  frontend Svc  │     │   backend Svc     │
+                   │  nginx · 2 rep │──▶──│   backend:5000    │
+                   │  proxies /api  │/api │   Flask · HPA 2–6 │
+                   └────────────────┘     └────────┬─────────┘
+                                                   │ SQLAlchemy
+                                                   ▼
+                                          ┌──────────────────┐
+                                          │  postgres (svc)  │
+                                          │  StatefulSet     │
+                                          │  PVC → EBS gp3   │
+                                          └──────────────────┘
 
-## 3. Cluster bring-up (Ansible) — reuse your provisioning muscle
+   Nodes: single AZ, eu-west-2a          GitOps
+   ┌───────────────┬──────────────┐       Argo CD ── watches ──▶ this repo
+   │ control-plane │ 10.0.1.192   │       (manifests/app, auto-sync,
+   │ worker-1      │ 10.0.1.61    │        prune + selfHeal)
+   │ worker-2      │ 10.0.1.201   │
+   └───────────────┴──────────────┘
+```
 
-Write a playbook (roles!) that turns bare VMs into a working cluster:
+Full detail (topology, request flow, and the single-server assumptions fixed) is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Required:**
-- Base hardening role (you already have one): non-root user, SSH keys only, ufw/firewalld, fail2ban optional.
-- `k3s-server` role: install k3s on the control-plane, capture the node token.
-- `k3s-agent` role: join each worker to the server using that token.
-- Idempotent — `ansible-playbook` twice in a row makes no changes the second time.
-- Fetch the kubeconfig back to your machine and rewrite the server address to the public IP.
+## Tech stack
 
-**Acceptance:** `kubectl get nodes` shows `Ready` for the server + all workers, from your laptop.
+| Layer | Technology | Notes |
+|---|---|---|
+| Infrastructure | **Terraform** (modular, remote state) | VPC, least-privilege SG, 3× EC2, EBS-CSI IAM, S3 + DynamoDB backend |
+| Cluster | **Ansible** (roles) + **k3s** v1.36 | hardening · k3s-server · k3s-agent; idempotent |
+| Ingress / TLS | **ingress-nginx** + **cert-manager** | Let's Encrypt production cert, HTTP-01 |
+| Storage | **AWS EBS CSI driver** (gp3) | network-attached PVC survives pod rescheduling |
+| App | **TaskApp**: Flask API + React/nginx SPA | images pinned by commit SHA on GHCR |
+| Database | **PostgreSQL 16** StatefulSet | Alembic migrations run once via a Job |
+| Autoscaling | **HPA** + metrics-server (bundled with k3s) | backend scales 2→6 on CPU/memory |
+| GitOps | **Argo CD** | single Application, automated prune + selfHeal |
 
----
+## Highlights
 
-## 4. The application on Kubernetes — where the real grading is
+- **Multi-node HA:** replicas spread across nodes; the app survives a worker being drained.
+- **Zero-downtime deploys:** `RollingUpdate` with `maxUnavailable: 0`, readiness gating,
+  `preStop` connection draining, and PodDisruptionBudgets.
+- **Real persistent storage:** Postgres on an EBS-backed PVC that detaches and re-attaches
+  when the pod moves nodes.
+- **Autoscaling:** a live HPA driven by real CPU/memory metrics.
+- **Defense in depth:** API server (`6443`) firewalled to a single admin IP at both the
+  cloud SG and host firewall; default-deny NetworkPolicy with an explicit
+  frontend → backend → postgres chain; non-root, capability-dropped containers.
+- **Secrets never touch git:** generated out-of-band; `git log -p` is clean.
+- **GitOps end-to-end:** commit → Argo auto-sync → live change, no manual `kubectl apply`.
 
-This is the heart of it. Everything in the K8s lesson, done *for real*, plus hardening.
+## Repository layout
 
-### Core (must have — non-negotiable)
-- [ ] Dedicated **namespace**; **ConfigMap** (non-secret) + **Secret** (secret), split the
-      same way your Compose deploy split committed `.env` vs Portainer env vars.
-- [ ] **Postgres as a StatefulSet** with a **PVC** (real persistent storage on the cluster's
-      storage class). Prove data survives a Pod delete.
-- [ ] **Backend + frontend as Deployments**, **2+ replicas each**, spread across **different
-      nodes** (`topologySpreadConstraints` or pod anti-affinity — don't let both replicas land
-      on one node).
-- [ ] **Migrations as a Job/initContainer**, *not* in the running replicas' entrypoint. Solve
-      the race: running migrations in the entrypoint is fine for a single replica, but at
-      2+ replicas they race on `alembic upgrade head`.
-- [ ] **liveness + readiness + startup probes** on every workload, using the app's real
-      endpoints (`/api/health`, `/healthz`, `pg_isready`).
-- [ ] **resources.requests + limits** on every container.
-- [ ] **RollingUpdate with `maxUnavailable: 0`** — prove zero dropped requests during a deploy.
-- [ ] **Ingress + TLS** via cert-manager + Let's Encrypt on **your real domain**
-      (`taskapp.<you>.dev` and `api.<you>.dev`, or same-origin `/api` — justify your choice).
-      A valid public certificate, not self-signed.
-- [ ] **Pinned image tags** (commit SHA or semver). `:latest` anywhere = automatic fail.
+```
+capstone-phoenix/
+├── infra/
+│   ├── terraform/          # VPC, security group, 3-node fleet, remote state, node IAM
+│   └── ansible/            # roles: hardening, k3s-server, k3s-agent
+├── manifests/
+│   ├── platform/           # ingress-nginx, cert-manager, EBS CSI, gp3 SC, ClusterIssuers
+│   └── app/                # TaskApp (kustomize): Postgres, backend, frontend, Job, HPA, NetPol, PDB
+├── gitops/                 # Argo CD Application pointing at manifests/app
+└── docs/
+    ├── ARCHITECTURE.md     # topology, request flow, single-server assumptions fixed
+    ├── RUNBOOK.md          # zero → running, day-2 ops, failure recovery
+    ├── COST.md             # itemized monthly cost + how to halve it
+    ├── EVIDENCE/           # screenshots/logs proving each requirement
+    └── ASSIGNMENT.md       # the original brief
+```
 
-### Advanced (required for a distinction — pick **at least 3**)
-- [ ] **HPA** on the backend (CPU and/or memory), demonstrated under a load test with graphs/logs.
-- [ ] **NetworkPolicy**: default-deny in the namespace; Postgres only reachable from the
-      backend; backend only from the frontend/ingress. (k3s ships Traefik + you'll need a CNI
-      that enforces policy — document your choice.)
-- [ ] **PodDisruptionBudget** + graceful shutdown (`terminationGracePeriodSeconds`, SIGTERM
-      handling) so node drains don't drop the app.
-- [ ] **Observability**: metrics-server + a dashboard (kube-prometheus-stack, or at minimum
-      Grafana/Prometheus) showing CPU/mem/replicas/request rate. Screenshots in `docs/`.
-- [ ] **Resource hardening**: `securityContext` (runAsNonRoot, readOnlyRootFilesystem where
-      possible, drop capabilities), `seccompProfile: RuntimeDefault`.
+## Quickstart
 
-### GitOps (required — this is the Portainer-GitOps idea, leveled up)
-- [ ] Install **Argo CD** (or Flux) on the cluster. Your app's desired state lives in this
-      git repo; the controller syncs it. **Your final, graded state must be reconciled by
-      GitOps — not by you running `kubectl apply` by hand.** Show a commit → auto-sync → live
-      change. This is the direct successor to your Portainer push-to-redeploy.
+Full, reproducible steps are in [`docs/RUNBOOK.md`](docs/RUNBOOK.md). In brief:
 
-### Stretch (bonus — for the strong)
-- [ ] CI that builds/pushes a new image and **bumps the tag in the GitOps repo** (full
-      git-driven deploy, mirroring your `cd.yaml`).
-- [ ] Sealed Secrets / External Secrets so the Secret can live in git safely.
-- [ ] Automated Postgres backup (CronJob → object storage) + a documented restore test.
-- [ ] Multi-replica HA Postgres or a managed DB, with a written trade-off analysis.
+```bash
+# 1. Infrastructure
+cd infra/terraform/bootstrap && terraform init && terraform apply   # remote-state backend
+cd .. && terraform init && terraform apply                          # 3-node fleet
 
----
+# 2. Cluster
+cd ../ansible && ansible-playbook site.yml                          # k3s across the nodes
+export KUBECONFIG=$(pwd)/kubeconfig && kubectl get nodes            # 3 × Ready
 
-## 5. Hard constraints (violations cap your grade)
+# 3. Platform
+cd ../../manifests/platform && ./install-platform.sh               # ingress, TLS, storage
 
-**Forbidden:**
-- `:latest` (or untagged) images anywhere.
-- Plaintext passwords / `SECRET_KEY` / kubeconfig / node token / `terraform.tfstate` committed to git.
-- The Kubernetes API (`6443`) exposed to `0.0.0.0/0`.
-- Manual console/`kubectl` changes as your *final* state (GitOps must own it; ad-hoc debugging is fine mid-build).
-- A single-node "cluster." Workers must be real, separate nodes.
-- Self-signed or placeholder TLS. Real domain, real cert.
+# 4. App (then Argo CD takes over)
+cd ../app && ./create-secret.sh && kubectl apply -k .
+cd ../../gitops && kubectl apply -f application.yaml                # GitOps owns it from here
+```
 
-**Required git hygiene:** meaningful commits, no secrets in history (`git log -p` will be
-checked), a `.gitignore` that covers state/kubeconfig/`.env`, no root SSH.
+## Documentation
 
----
-
-## 6. Deliverables
-
-1. **This repo**, structured roughly as `STRUCTURE.md` describes: `infra/terraform/`,
-   `infra/ansible/`, `manifests/` (or a Helm chart / kustomize overlays), `gitops/`, `docs/`.
-2. **`docs/ARCHITECTURE.md`** — diagram + prose: node topology, networking, how a request
-   flows from DNS → ingress → frontend → backend → Postgres, and **for each Core requirement,
-   the single-server assumption it fixes**.
-3. **`docs/RUNBOOK.md`** — exact commands to provision from zero, deploy, scale, roll back,
-   and recover from: a dead worker, a dead backend, a bad migration.
-4. **`docs/COST.md`** — monthly cost of your infra, itemized, with one paragraph on how you'd
-   cut it in half.
-5. **`docs/EVIDENCE/`** — screenshots/logs proving: `kubectl get nodes` (multi-node Ready),
-   pods spread across nodes, a valid TLS cert (`curl -vI` or SSL Labs), data surviving a Pod
-   kill, a zero-downtime rollout (unbroken 200s), HPA scaling, and Argo CD synced/healthy.
-6. **Live demo (10 min):** architecture walkthrough + a **live failover** — drain or power
-   off a worker node on camera and show the app stays up and Pods reschedule.
-
----
-
-## 7. Grading (100 pts)
-
-| Area | Pts | What earns it |
-|---|---:|---|
-| Infrastructure (Terraform, multi-node, remote state, least-priv) | 15 | reproducible, modular, no secrets/state in git |
-| Cluster bring-up (Ansible, idempotent, workers joined) | 10 | `get nodes` all Ready from a clean run |
-| Core app on K8s (§4 Core, all boxes) | 30 | every box ticked and demonstrated |
-| Advanced (≥3 of §4 Advanced) | 15 | working + evidence, not just present |
-| GitOps owns the cluster | 10 | commit → auto-sync shown live |
-| Security & constraints (§5) | 10 | zero violations; secrets clean |
-| Docs (architecture / runbook / cost) | 10 | a teammate could rebuild from your runbook |
-| Viva + live failover demo | varies | you can explain *why*, and the node-kill demo works |
-
-**Caps:** any §5 violation caps you at 60. A non-working app (can't load `taskapp.<domain>`
-over HTTPS) caps you at 50, regardless of how nice the YAML is.
-
-**Distinction (90+):** all Core + GitOps + ≥3 Advanced + a clean failover demo + docs a
-stranger could follow.
-
----
-
-## 8. Suggested 3-week milestones
-
-| By end of | You have |
+| Doc | What's in it |
 |---|---|
-| Day 3 | Terraform up: 3 VMs, remote state, firewall. `ssh` works. |
-| Day 6 | Ansible installs k3s; `kubectl get nodes` shows 3 Ready from your laptop. |
-| Day 10 | Core app deployed by hand: Postgres+PVC, migration Job, 2 replicas/tier spread across nodes, probes, Ingress+TLS live on your domain. |
-| Day 14 | Argo CD owns the app (GitOps); zero-downtime rollout + HPA demos recorded. |
-| Day 18 | ≥3 Advanced done; NetworkPolicy/PDB/observability evidence captured. |
-| Day 21 | Docs finished; failover demo rehearsed; submit. |
+| [Architecture](docs/ARCHITECTURE.md) | Node/network topology, request flow, design trade-offs, the assumptions table |
+| [Runbook](docs/RUNBOOK.md) | Provision from zero, scale, roll back, rotate secrets, recover from failures |
+| [Cost](docs/COST.md) | Itemized monthly AWS cost and a concrete plan to halve it |
+| [Evidence](docs/EVIDENCE/) | Proof for each requirement (multi-node, TLS, persistence, zero-downtime, HPA, failover, GitOps) |
 
 ---
 
-Start by reading the K8s lesson, then open `STRUCTURE.md`.
-
-SUBMISSION LINK:
-https://docs.google.com/forms/d/e/1FAIpQLSdp-5Zfvt431gY8m2L_MOZ7NQ-8zN2L3jvkgL7P3yP7-pd94Q/viewform?usp=header
+*Built as an individual DevOps capstone. The application (TaskApp) is provided; all
+infrastructure, cluster, platform, deployment, GitOps, and documentation are the work here.*
