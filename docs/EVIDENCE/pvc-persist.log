@@ -1,0 +1,7 @@
+--- create a task so the count is non-zero ---
+task created
+--- BEFORE: task count ---
+1
+--- deleting postgres-0 (StatefulSet recreates it; EBS volume re-attaches) ---
+pod "postgres-0" deleted from taskapp namespace
+--- AFTER: task count (same value = data survived the reschedule) ---

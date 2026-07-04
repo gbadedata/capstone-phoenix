@@ -1,0 +1,6 @@
+NAME                                      POD-SELECTOR                              AGE
+allow-acme-solver-from-ingress            acme.cert-manager.io/http01-solver=true   31m
+allow-backend-from-frontend-and-ingress   app=backend                               55m
+allow-frontend-from-ingress               app=frontend                              55m
+allow-postgres-from-backend               app=postgres                              55m
+default-deny-ingress                      <none>                                    55m

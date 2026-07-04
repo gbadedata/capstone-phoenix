@@ -1,0 +1,2 @@
+NAME      REFERENCE            TARGETS                        MINPODS   MAXPODS   REPLICAS   AGE
+backend   Deployment/backend   cpu: 1%/60%, memory: 62%/75%   2         6         2          55m
