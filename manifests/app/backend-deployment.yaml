@@ -4,7 +4,7 @@ metadata:
   name: backend
   namespace: taskapp
 spec:
-  # No replicas here on purpose — the HPA owns backend scaling (minReplicas: 2).
+  # No replicas here on purpose: the HPA owns backend scaling (minReplicas: 2).
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -71,6 +71,11 @@ spec:
           env:
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
+            - name: TMPDIR
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           lifecycle:
             preStop:
               exec:
@@ -95,6 +100,14 @@ spec:
             limits:
               memory: 384Mi
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
             seccompProfile:
               type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
