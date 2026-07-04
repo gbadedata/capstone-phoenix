@@ -31,6 +31,12 @@ spec:
         # (which runs `alembic upgrade head`) never races with other replicas on migration.
         - name: wait-for-db-ready
           image: ghcr.io/ts-a-devops/taskapp-backend:5d6b8fc
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
           envFrom:
             - secretRef:
                 name: taskapp-secret

@@ -19,10 +19,22 @@ spec:
       initContainers:
         - name: wait-for-postgres
           image: postgres:16.4
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
           command: ["sh", "-c", "until pg_isready -h postgres -p 5432 -U taskuser; do echo waiting for postgres; sleep 2; done"]
       containers:
         - name: db-init
           image: ghcr.io/ts-a-devops/taskapp-backend:5d6b8fc
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 384Mi
           envFrom:
             - configMapRef:
                 name: taskapp-config      # DATABASE_HOST/PORT/NAME/USER (for alembic)
